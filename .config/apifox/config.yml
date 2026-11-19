@@ -1,0 +1,12 @@
+# apifox-pub.sh 示例配置（可入库，全部为占位值）
+# 本地真实配置请放到 ~/.config/apifox/config.yml（或 XDG_CONFIG_HOME 下），脚本优先读取它。
+defaults:
+  source_branch: main
+  overwrite_mode: overwrite
+
+projects:
+  demo:                       # key = 业务项目目录名
+    apifox_project: "123456"  # Apifox 项目 ID
+    path_prefix: demo         # 系统路由前缀，可空
+    module: demo              # 模块名/文档标题，可空则用目录名
+    branch: ai/20261119-from-main-demo  # 固定分支，可空则按日期生成
