@@ -83,6 +83,7 @@ projects:
 | `--main` | 直接写源分支（需项目开启外部 AI 编辑权限） |
 | `--from <branch>` | AI 分支的源分支，默认取 YAML `defaults.source_branch` |
 | `--title <name>` | 覆盖模块名 |
+| `--api <METHOD> <PATH>` | 只更新指定接口，可重复；不传则更新全部。路径用带前缀的完整路径，找不到即报错不导入 |
 | `--build` / `--no-build` | 强制构建 / 禁用自动构建 |
 | `-y, --yes` | 跳过确认 |
 

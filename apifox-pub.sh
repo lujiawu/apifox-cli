@@ -25,6 +25,7 @@ usage() {
   --main            直接写源分支（需项目开启外部 AI 编辑权限）
   --from <branch>   AI 分支的源分支，默认 main
   --title <name>    模块名/文档标题，默认项目目录名
+  --api <METHOD> <PATH>  只更新指定接口（可重复），不传则更新全部
   --build           强制先构建
   --no-build        不构建，直接用现有 fat jar
   -y, --yes         跳过确认，直接发布
@@ -66,6 +67,7 @@ BUILD_CMD="${PUB_BUILD_CMD:-mvn -DskipTests package}"
 
 DIR="" ; INCLUDE="" ; PROJECT="" ; PREFIX="" ; BRANCH="" ; BRANCH_GIVEN=0 ; MAIN=0 ; YES=0 ; POS=()
 FROM="" ; TITLE="" ; TITLE_SET=0 ; NO_BUILD=0 ; FORCE_BUILD=0
+API_FILTER=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -73,6 +75,7 @@ while [[ $# -gt 0 ]]; do
     --main) MAIN=1; shift ;;
     --from) FROM="${2:?}"; shift 2 ;;
     --title) TITLE="${2:?}"; TITLE_SET=1; shift 2 ;;
+    --api) _m="${2:?}"; _p="${3:?}"; API_FILTER+=("$_m $_p"); shift 3 ;;
     --build) FORCE_BUILD=1; shift ;;
     --no-build) NO_BUILD=1; shift ;;
     -y|--yes) YES=1; shift ;;
@@ -201,6 +204,30 @@ set -e
 [[ $CODE -eq 2 ]] && die "未扫到 @RestController（检查包名）"
 [[ $CODE -ne 0 ]] && exit 1
 
+if [[ ${#API_FILTER[@]} -gt 0 ]]; then
+  python3 - "$OUT" "${API_FILTER[@]}" <<'PY'
+import json, sys
+out = sys.argv[1]
+methods = {'get','post','put','patch','delete','head','options','trace'}
+d = json.load(open(out, encoding='utf-8'))
+paths = d.get('paths') or {}
+kept = {}
+for raw in sys.argv[2:]:
+    method, path = raw.split(' ', 1)
+    method, path = method.strip().lower(), path.strip()
+    item = paths.get(path)
+    if not isinstance(item, dict) or method not in item:
+        avail = sorted(f'{m.upper()} {p}' for p, v in paths.items() for m in v if m in methods)
+        sys.exit(f'ERROR: 白名单接口不存在: {method.upper()} {path}\n可用接口: ' + ', '.join(avail[:30]))
+    base = {k: v for k, v in item.items() if k not in methods}
+    kept.setdefault(path, dict(base))[method] = item[method]
+d['paths'] = kept
+with open(out, 'w', encoding='utf-8') as f:
+    json.dump(d, f, ensure_ascii=False, indent=2)
+print(f'白名单过滤: 只更新 {sum(len(v) for v in kept.values())} 个接口', file=sys.stderr)
+PY
+fi
+
 SOURCE_BRANCH="$FROM"
 APIFOX_ARGS=(--project "$PROJECT")
 [[ -n "${APIFOX_ACCESS_TOKEN:-}" ]] && APIFOX_ARGS+=(--access-token "$APIFOX_ACCESS_TOKEN")
@@ -266,6 +293,11 @@ if [[ $YES -eq 0 ]]; then
   [[ "$ans" =~ ^[Yy]$ ]] || { echo "已取消，未写入 Apifox" >&2; exit 0; }
 fi
 
+BEFORE_COUNT="$( { apifox endpoint list "${APIFOX_ARGS[@]}" --branch "$BRANCH" 2>/dev/null || true; } \
+  | python3 -c 'import json,sys
+try: print(len(json.load(sys.stdin).get("data") or []))
+except Exception: print(-1)')"
+
 IMPORT_ARGS=(import "${APIFOX_ARGS[@]}" --format openapi --file "$OUT" --overwrite-mode "$OVERWRITE_MODE" --branch "$BRANCH")
 if [[ $MAIN -eq 0 && $BRANCH_GIVEN -eq 0 && "$BRANCH_STATE" != "active" ]]; then
   set +e
@@ -303,6 +335,11 @@ if item.get('errorCount', 0) > 0: sys.exit('ERROR: 导入存在失败项')
 PY
 
 LIST_OUT="$(apifox endpoint list "${APIFOX_ARGS[@]}" --branch "$BRANCH" 2>/dev/null)"
+AFTER_COUNT="$(python3 -c 'import json,sys
+try: print(len(json.loads(sys.argv[1]).get("data") or []))
+except Exception: print(-1)' "$LIST_OUT")"
+[[ $BEFORE_COUNT -ge 0 && $AFTER_COUNT -ge 0 && $AFTER_COUNT -lt $BEFORE_COUNT ]] && \
+  die "接口数从 $BEFORE_COUNT 降到 $AFTER_COUNT，疑似误删"
 BASE_OUT=""
 [[ "$BRANCH" != "$SOURCE_BRANCH" ]] && BASE_OUT="$(apifox endpoint list "${APIFOX_ARGS[@]}" --branch "$SOURCE_BRANCH" 2>/dev/null)"
 python3 - "$OUT" "$LIST_OUT" "$BASE_OUT" <<'PY'
